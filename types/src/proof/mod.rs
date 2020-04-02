@@ -1,25 +1,15 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-pub mod accumulator;
 pub mod definition;
-pub mod position;
 #[cfg(any(test, feature = "fuzzing"))]
 pub mod proptest_proof;
 
 #[cfg(test)]
 mod unit_tests;
 
-use crate::{
-    ledger_info::LedgerInfo,
-    transaction::{TransactionInfo, Version},
-};
-use anyhow::{ensure, Result};
 use libra_crypto::{
-    hash::{
-        CryptoHash, CryptoHasher, EventAccumulatorHasher, SparseMerkleInternalHasher,
-        TestOnlyHasher, TransactionAccumulatorHasher,
-    },
+    hash::{CryptoHash, CryptoHasher, SparseMerkleInternalHasher},
     HashValue,
 };
 use libra_crypto_derive::CryptoHasher;
@@ -28,39 +18,10 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-pub use self::definition::{
-    AccountStateProof, AccumulatorConsistencyProof, AccumulatorExtensionProof, AccumulatorProof,
-    AccumulatorRangeProof, EventAccumulatorProof, EventProof, SparseMerkleProof,
-    SparseMerkleRangeProof, TransactionAccumulatorProof, TransactionAccumulatorRangeProof,
-    TransactionInfoWithProof, TransactionListProof,
-};
+pub use self::definition::{SparseMerkleProof, SparseMerkleRangeProof};
 
 #[cfg(any(test, feature = "fuzzing"))]
 pub use self::definition::{TestAccumulatorProof, TestAccumulatorRangeProof};
-
-/// Verifies that a given `transaction_info` exists in the ledger using provided proof.
-fn verify_transaction_info(
-    ledger_info: &LedgerInfo,
-    transaction_version: Version,
-    transaction_info: &TransactionInfo,
-    ledger_info_to_transaction_info_proof: &TransactionAccumulatorProof,
-) -> Result<()> {
-    ensure!(
-        transaction_version <= ledger_info.version(),
-        "Transaction version {} is newer than LedgerInfo version {}.",
-        transaction_version,
-        ledger_info.version(),
-    );
-
-    let transaction_info_hash = transaction_info.hash();
-    ledger_info_to_transaction_info_proof.verify(
-        ledger_info.transaction_accumulator_hash(),
-        transaction_info_hash,
-        transaction_version,
-    )?;
-
-    Ok(())
-}
 
 pub struct MerkleTreeInternalNode<H> {
     left_child: HashValue,
@@ -90,9 +51,6 @@ impl<H: CryptoHasher> CryptoHash for MerkleTreeInternalNode<H> {
 }
 
 pub type SparseMerkleInternalNode = MerkleTreeInternalNode<SparseMerkleInternalHasher>;
-pub type TransactionAccumulatorInternalNode = MerkleTreeInternalNode<TransactionAccumulatorHasher>;
-pub type EventAccumulatorInternalNode = MerkleTreeInternalNode<EventAccumulatorHasher>;
-pub type TestAccumulatorInternalNode = MerkleTreeInternalNode<TestOnlyHasher>;
 
 #[derive(Clone, Copy, CryptoHasher, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
