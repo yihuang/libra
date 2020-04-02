@@ -96,9 +96,8 @@ use once_cell::sync::Lazy;
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
 use rand::{rngs::EntropyRng, Rng};
-use serde::{de, ser};
+use serde::{Deserialize, Serialize};
 use std::{self, convert::AsRef, fmt};
-use tiny_keccak::{Hasher, Sha3};
 
 const LIBRA_HASH_SUFFIX: &[u8] = b"@@$$LIBRA$$@@";
 
@@ -109,7 +108,7 @@ mod hash_test;
 const SHORT_STRING_LENGTH: usize = 4;
 
 /// Output value of our hash function. Intentionally opaque for safety and modularity.
-#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 pub struct HashValue {
     hash: [u8; HashValue::LENGTH],
@@ -175,9 +174,9 @@ impl HashValue {
     /// Convenience function to compute a sha3-256 HashValue of the buffer. It will handle hasher
     /// creation, data feeding and finalization.
     pub fn from_sha3_256(buffer: &[u8]) -> Self {
-        let mut sha3 = Sha3::v256();
+        let mut sha3 = blake3::Hasher::new();
         sha3.update(buffer);
-        HashValue::from_keccak(sha3)
+        HashValue::from_blake3(sha3)
     }
 
     #[cfg(test)]
@@ -185,21 +184,15 @@ impl HashValue {
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
-        let mut sha3 = Sha3::v256();
+        let mut sha3 = blake3::Hasher::new();
         for buffer in buffers {
             sha3.update(buffer);
         }
-        HashValue::from_keccak(sha3)
+        HashValue::from_blake3(sha3)
     }
 
-    fn as_ref_mut(&mut self) -> &mut [u8] {
-        &mut self.hash[..]
-    }
-
-    fn from_keccak(state: Sha3) -> Self {
-        let mut hash = Self::zero();
-        state.finalize(hash.as_ref_mut());
-        hash
+    fn from_blake3(state: blake3::Hasher) -> Self {
+        HashValue::new(state.finalize().into())
     }
 
     /// Returns a `HashValueBitIterator` over all the bits that represent this `HashValue`.
@@ -260,43 +253,6 @@ impl HashValue {
     /// Parse a given hex string to a hash value.
     pub fn from_hex(hex_str: &str) -> Result<Self> {
         Self::from_slice(hex::decode(hex_str)?.as_slice())
-    }
-}
-
-// TODO(#1307)
-impl ser::Serialize for HashValue {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: ser::Serializer,
-    {
-        if serializer.is_human_readable() {
-            serializer.serialize_str(&self.to_hex())
-        } else {
-            // In order to preserve the Serde data model and help analysis tools,
-            // make sure to wrap our value in a container with the same name
-            // as the original type.
-            serializer.serialize_newtype_struct("HashValue", &self.hash[..])
-        }
-    }
-}
-
-impl<'de> de::Deserialize<'de> for HashValue {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: de::Deserializer<'de>,
-    {
-        if deserializer.is_human_readable() {
-            let encoded_hash = <&str>::deserialize(deserializer)?;
-            HashValue::from_hex(encoded_hash).map_err(<D::Error as ::serde::de::Error>::custom)
-        } else {
-            // See comment in serialize.
-            #[derive(::serde::Deserialize)]
-            #[serde(rename = "HashValue")]
-            struct Value<'a>(&'a [u8]);
-
-            let value = Value::deserialize(deserializer)?;
-            Self::from_slice(value.0).map_err(<D::Error as ::serde::de::Error>::custom)
-        }
     }
 }
 
@@ -449,14 +405,12 @@ pub trait CryptoHasher: Default {
 /// * Only used internally within this crate
 #[derive(Clone)]
 pub struct DefaultHasher {
-    state: Sha3,
+    state: blake3::Hasher,
 }
 
 impl CryptoHasher for DefaultHasher {
     fn finish(self) -> HashValue {
-        let mut hasher = HashValue::default();
-        self.state.finalize(hasher.as_ref_mut());
-        hasher
+        HashValue::new(self.state.finalize().into())
     }
 
     fn write(&mut self, bytes: &[u8]) -> &mut Self {
@@ -468,7 +422,7 @@ impl CryptoHasher for DefaultHasher {
 impl Default for DefaultHasher {
     fn default() -> Self {
         DefaultHasher {
-            state: Sha3::v256(),
+            state: blake3::Hasher::new(),
         }
     }
 }
@@ -476,7 +430,7 @@ impl Default for DefaultHasher {
 impl DefaultHasher {
     /// initialize a new hasher with a specific salt
     pub fn new_with_salt(typename: &[u8]) -> Self {
-        let mut state = Sha3::v256();
+        let mut state = blake3::Hasher::new();
         if !typename.is_empty() {
             let mut salt = typename.to_vec();
             salt.extend_from_slice(LIBRA_HASH_SUFFIX);
@@ -602,13 +556,4 @@ pub static GENESIS_BLOCK_ID: Lazy<HashValue> = Lazy::new(|| {
 pub trait TestOnlyHash {
     /// Generates a hash used only for tests.
     fn test_only_hash(&self) -> HashValue;
-}
-
-impl<T: ser::Serialize + ?Sized> TestOnlyHash for T {
-    fn test_only_hash(&self) -> HashValue {
-        let bytes = lcs::to_bytes(self).expect("serialize failed during hash.");
-        let mut hasher = TestOnlyHasher::default();
-        hasher.write(&bytes);
-        hasher.finish()
-    }
 }
