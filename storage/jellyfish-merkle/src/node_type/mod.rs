@@ -624,11 +624,14 @@ impl Node {
 
     /// Computes the hash of nodes.
     pub fn hash(&self) -> HashValue {
-        match self {
+        let now = std::time::SystemTime::now();
+        let h = match self {
             Node::Null => *SPARSE_MERKLE_PLACEHOLDER_HASH,
             Node::Internal(internal_node) => internal_node.hash(),
             Node::Leaf(leaf_node) => leaf_node.hash(),
-        }
+        };
+        println!("hash time: {:?}", now.elapsed());
+        h
     }
 
     /// Recovers from serialized bytes in physical storage.

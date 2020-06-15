@@ -179,7 +179,10 @@ where
         } else if let Some(node) = self.frozen_cache.node_cache.get(node_key) {
             node.clone()
         } else {
-            self.reader.get_node(node_key)?
+            let now = std::time::SystemTime::now();
+            let n = self.reader.get_node(node_key)?;
+            println!("load node: {:?}", now.elapsed());
+            n
         })
     }
 
